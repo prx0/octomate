@@ -3,7 +3,7 @@ use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
 use tokio::fs;
-use tracing::info;
+use tracing::{info, debug};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 #[derive(Debug, Snafu)]
@@ -35,6 +35,7 @@ struct Batch {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 struct Job {
     name: Option<String>,
     on_repositories: Vec<Repository>,
@@ -54,7 +55,7 @@ struct Step {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-#[serde(rename(deserialize = "kebab-case"))]
+#[serde(rename_all = "kebab-case")]
 enum Command {
     CreateLabel(CreateLabelOptions),
 }
@@ -98,9 +99,8 @@ type BatchRes = Vec<Vec<Vec<Vec<Result<OctocrabResult, Error>>>>>;
 
 impl Octomate {
     async fn new(personal_token: String) -> Result<Self, Error> {
-        let octocrab_builder = octocrab::Octocrab::builder().personal_token(personal_token);
-        let octocrab = octocrab::initialise(octocrab_builder).context(OctocrabSnafu)?;
-        Ok(Self { octocrab })
+        let octocrab = octocrab::Octocrab::builder().personal_token(personal_token).build().context(OctocrabSnafu)?;
+        Ok(Self { octocrab: Arc::new(octocrab) })
     }
 
     async fn run_batch(&self, batch: &Batch) -> Result<BatchRes, Error> {
@@ -125,6 +125,7 @@ impl Octomate {
                     let on_repositories_iter = repositories.iter().map(|repository| async move {
                         match command {
                             Command::CreateLabel(options) => {
+                                debug!("options: {:?}", options);
                                 let label = self
                                     .octocrab
                                     .issues(&repository.owner, &repository.name)
