@@ -30,31 +30,44 @@ enum BatchFile<'a> {
 
 #[derive(Deserialize, Debug, Clone)]
 struct Batch {
+    name: Option<String>,
+    jobs: Vec<Job>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct Job {
+    name: Option<String>,
+    on_repositories: Vec<Repository>,
+    steps: Vec<Step>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct Repository {
+    owner: String,
     name: String,
-    tasks: Vec<Task>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct Task {
-    command: Command,
+struct Step {
+    name: Option<String>,
+    runs: Vec<Command>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(rename(deserialize = "kebab-case"))]
 enum Command {
     CreateLabel(CreateLabelOptions),
 }
 
-enum OctocrabResult {
-    CreateLabel(Label),
-}
-
 #[derive(Deserialize, Debug, Clone)]
 struct CreateLabelOptions {
-    owner: String,
-    repo: String,
     name: String,
     color: String,
     description: String,
+}
+
+enum OctocrabResult {
+    CreateLabel(Label),
 }
 
 impl BatchFile<'_> {
@@ -81,6 +94,8 @@ struct Octomate {
     octocrab: Arc<Octocrab>,
 }
 
+type BatchRes = Vec<Vec<Vec<Vec<Result<OctocrabResult, Error>>>>>;
+
 impl Octomate {
     async fn new(personal_token: String) -> Result<Self, Error> {
         let octocrab_builder = octocrab::Octocrab::builder().personal_token(personal_token);
@@ -88,38 +103,55 @@ impl Octomate {
         Ok(Self { octocrab })
     }
 
-    async fn run_batch(&self, batch: &Batch) -> Result<Vec<Result<OctocrabResult, Error>>, Error> {
-        info!("Running batch: {}", batch.name);
-        let tasks = &batch.tasks;
-        let command_iter = tasks.iter().map(|task| async move {
-            match &task.command {
-                Command::CreateLabel(options) => {
-                    let CreateLabelOptions {
-                        owner,
-                        repo,
-                        name,
-                        color,
-                        description,
-                    } = options;
-                    let label = self
-                        .octocrab
-                        .issues(owner, repo)
-                        .create_label(name, color, description)
-                        .await
-                        .context(OctocrabSnafu)?;
-                    Ok(OctocrabResult::CreateLabel(label))
-                }
-            }
+    async fn run_batch(&self, batch: &Batch) -> Result<BatchRes, Error> {
+        info!(
+            "Running batch: {}",
+            batch.name.clone().unwrap_or("UNAMED".to_string())
+        );
+        let jobs = &batch.jobs;
+
+        let jobs_iter = jobs.iter().map(|job| async move {
+            info!("job: {}", &job.name.clone().unwrap_or("UNAMED".to_string()));
+            let on_repositories = &job.on_repositories;
+            let steps = &job.steps;
+            let steps_iter = steps.iter().map(|step| async move {
+                info!(
+                    "step: {}",
+                    &step.name.clone().unwrap_or("UNAMED".to_string())
+                );
+                let runs = &step.runs;
+                let runs_iter = runs.iter().map(|command| async move {
+                    let repositories = &on_repositories;
+                    let on_repositories_iter = repositories.iter().map(|repository| async move {
+                        match command {
+                            Command::CreateLabel(options) => {
+                                let label = self
+                                    .octocrab
+                                    .issues(&repository.owner, &repository.name)
+                                    .create_label(
+                                        &options.name,
+                                        &options.color,
+                                        &options.description,
+                                    )
+                                    .await
+                                    .context(OctocrabSnafu)?;
+                                Ok(OctocrabResult::CreateLabel(label))
+                            }
+                        }
+                    });
+                    futures::future::join_all(on_repositories_iter).await
+                });
+                futures::future::join_all(runs_iter).await
+            });
+            futures::future::join_all(steps_iter).await
         });
-        let command_results: Vec<Result<OctocrabResult, Error>> =
-            futures::future::join_all(command_iter).await;
-        Ok(command_results)
+
+        let job_results: BatchRes = futures::future::join_all(jobs_iter).await;
+
+        Ok(job_results)
     }
 
-    async fn run_batch_from_file(
-        &self,
-        batch_file: &BatchFile<'_>,
-    ) -> Result<Vec<Result<OctocrabResult, Error>>, Error> {
+    async fn run_batch_from_file(&self, batch_file: &BatchFile<'_>) -> Result<BatchRes, Error> {
         let batch = batch_file.read_batch().await?;
         self.run_batch(&batch).await
     }
@@ -138,6 +170,7 @@ async fn main() {
     let octomate = Octomate::new(personal_token)
         .await
         .expect("Unable to init octocrab");
+
     octomate
         .run_batch_from_file(&BatchFile::Yaml("batch.yml"))
         .await
