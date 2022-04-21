@@ -32,6 +32,7 @@ async fn read_file(path: impl AsRef<Path>) -> Result<Vec<u8>, Error> {
 
 #[derive(Deserialize, Debug, Clone)]
 struct Batch {
+    version: String,
     name: Option<String>,
     jobs: Vec<Job>,
 }
