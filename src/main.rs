@@ -1,7 +1,7 @@
 use octocrab::{models::Label, Octocrab};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 use tokio::fs;
 use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
@@ -9,7 +9,7 @@ use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 #[derive(Debug, Snafu)]
 enum Error {
     #[snafu(display("Could not read file {path}"))]
-    ConfigFile {
+    IO {
         source: tokio::io::Error,
         path: String,
     },
@@ -23,58 +23,149 @@ enum Error {
     Octocrab { source: octocrab::Error },
 }
 
-enum BatchFile<'a> {
-    Yaml(&'a str),
-    Json(&'a str),
+async fn read_file(path: impl AsRef<Path>) -> Result<Vec<u8>, Error> {
+    let bytes = fs::read(&path).await.context(IOSnafu {
+        path: String::from(path.as_ref().to_str().unwrap_or("")),
+    })?;
+    Ok(bytes)
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct Batch {
+    version: String,
+    name: Option<String>,
+    jobs: Vec<Job>,
+}
+
+type BatchResult<Output, Err> = Vec<Vec<StepResult<Output, Err>>>;
+
+impl Batch {
+    pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<OctocrabResult, Error> {
+        info!(
+            "Running batch: {}",
+            &self.name.clone().unwrap_or("UNAMED".to_string())
+        );
+        let jobs = &self.jobs;
+        let jobs_iter = jobs
+            .iter()
+            .map(|job| async move { job.run(octocrab).await });
+        futures::future::join_all(jobs_iter).await
+    }
+}
+
+impl TryFrom<&[u8]> for Batch {
+    type Error = Error;
+
+    fn try_from(batch_file: &[u8]) -> Result<Self, Self::Error> {
+        let batch = serde_yaml::from_slice(&batch_file).context(SerdeYamlSnafu)?;
+        Ok(batch)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
+struct Job {
+    name: Option<String>,
+    on_repositories: Vec<Repository>,
+    steps: Vec<Step>,
+}
+
+impl Job {
+    pub async fn run(&self, octocrab: &Octocrab) -> Vec<StepResult<OctocrabResult, Error>> {
+        info!(
+            "job: {}",
+            &self.name.clone().unwrap_or("UNAMED".to_string())
+        );
+        let on_repositories = &self.on_repositories;
+        let steps = &self.steps;
+        let steps_iter = steps
+            .iter()
+            .map(|step| async move { step.run(octocrab, on_repositories).await });
+        futures::future::join_all(steps_iter).await
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct Repository {
+    owner: String,
     name: String,
-    tasks: Vec<Task>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct Task {
-    command: Command,
+struct Step {
+    name: Option<String>,
+    runs: Vec<Command>,
+}
+
+type StepResult<Output, Err> = Vec<Vec<Result<Output, Err>>>;
+
+impl Step {
+    pub async fn run(
+        &self,
+        octocrab: &Octocrab,
+        repositories: &[Repository],
+    ) -> StepResult<OctocrabResult, Error> {
+        info!(
+            "step: {}",
+            &self.name.clone().unwrap_or("UNAMED".to_string())
+        );
+        let runs = &self.runs;
+        let runs_iter = runs.iter().map(|command| async move {
+            let on_repositories_iter = repositories.iter().map(|repository| async move {
+                command
+                    .run(octocrab, &repository.owner, &repository.name)
+                    .await
+            });
+            futures::future::join_all(on_repositories_iter).await
+        });
+        futures::future::join_all(runs_iter).await
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 enum Command {
     CreateLabel(CreateLabelOptions),
 }
 
-enum OctocrabResult {
-    CreateLabel(Label),
+impl Command {
+    pub async fn run(
+        &self,
+        octocrab: &Octocrab,
+        owner: impl Into<String>,
+        repo: impl Into<String>,
+    ) -> Result<OctocrabResult, Error> {
+        match self {
+            Self::CreateLabel(options) => options.run(octocrab, owner, repo).await,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct CreateLabelOptions {
-    owner: String,
-    repo: String,
     name: String,
     color: String,
     description: String,
 }
 
-impl BatchFile<'_> {
-    async fn read_batch(&self) -> Result<Batch, Error> {
-        let batch = match self {
-            Self::Json(path) => {
-                let batch_file = fs::read(path).await.context(ConfigFileSnafu {
-                    path: String::from(path.to_owned()),
-                })?;
-                serde_json::from_slice(&batch_file).context(SerdeJsonSnafu)?
-            }
-            Self::Yaml(path) => {
-                let batch_file = fs::read(path).await.context(ConfigFileSnafu {
-                    path: String::from(path.to_owned()),
-                })?;
-                serde_yaml::from_slice(&batch_file).context(SerdeYamlSnafu)?
-            }
-        };
-        Ok(batch)
+impl CreateLabelOptions {
+    pub async fn run(
+        &self,
+        octocrab: &Octocrab,
+        owner: impl Into<String>,
+        repo: impl Into<String>,
+    ) -> Result<OctocrabResult, Error> {
+        let label = octocrab
+            .issues(owner, repo)
+            .create_label(&self.name, &self.color, &self.description)
+            .await
+            .context(OctocrabSnafu)?;
+        Ok(OctocrabResult::CreateLabel(label))
     }
+}
+
+enum OctocrabResult {
+    CreateLabel(Label),
 }
 
 struct Octomate {
@@ -83,45 +174,26 @@ struct Octomate {
 
 impl Octomate {
     async fn new(personal_token: String) -> Result<Self, Error> {
-        let octocrab_builder = octocrab::Octocrab::builder().personal_token(personal_token);
-        let octocrab = octocrab::initialise(octocrab_builder).context(OctocrabSnafu)?;
-        Ok(Self { octocrab })
+        let octocrab = octocrab::Octocrab::builder()
+            .personal_token(personal_token)
+            .build()
+            .context(OctocrabSnafu)?;
+        Ok(Self {
+            octocrab: Arc::new(octocrab),
+        })
     }
 
-    async fn run_batch(&self, batch: &Batch) -> Result<Vec<Result<OctocrabResult, Error>>, Error> {
-        info!("Running batch: {}", batch.name);
-        let tasks = &batch.tasks;
-        let command_iter = tasks.iter().map(|task| async move {
-            match &task.command {
-                Command::CreateLabel(options) => {
-                    let CreateLabelOptions {
-                        owner,
-                        repo,
-                        name,
-                        color,
-                        description,
-                    } = options;
-                    let label = self
-                        .octocrab
-                        .issues(owner, repo)
-                        .create_label(name, color, description)
-                        .await
-                        .context(OctocrabSnafu)?;
-                    Ok(OctocrabResult::CreateLabel(label))
-                }
-            }
-        });
-        let command_results: Vec<Result<OctocrabResult, Error>> =
-            futures::future::join_all(command_iter).await;
-        Ok(command_results)
+    async fn run_batch(&self, batch: &Batch) -> BatchResult<OctocrabResult, Error> {
+        batch.run(&self.octocrab).await
     }
 
     async fn run_batch_from_file(
         &self,
-        batch_file: &BatchFile<'_>,
-    ) -> Result<Vec<Result<OctocrabResult, Error>>, Error> {
-        let batch = batch_file.read_batch().await?;
-        self.run_batch(&batch).await
+        filepath: impl AsRef<Path>,
+    ) -> Result<BatchResult<OctocrabResult, Error>, Error> {
+        let bytes = read_file(filepath).await?;
+        let batch = Batch::try_from(bytes.as_slice())?;
+        Ok(self.run_batch(&batch).await)
     }
 }
 
@@ -135,11 +207,13 @@ async fn main() {
     let personal_token =
         rpassword::prompt_password("Enter your personal access token (scope: repo): ")
             .expect("You need to enter a valid personal access token");
+
     let octomate = Octomate::new(personal_token)
         .await
         .expect("Unable to init octocrab");
+
     octomate
-        .run_batch_from_file(&BatchFile::Yaml("batch.yml"))
+        .run_batch_from_file("batch.yml")
         .await
         .expect("Unable to run batch from file");
 }
