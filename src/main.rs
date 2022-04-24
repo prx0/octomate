@@ -3,7 +3,7 @@ use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
 use tokio::fs;
-use tracing::info;
+use tracing::{info, debug};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 #[derive(Debug, Snafu)]
@@ -73,6 +73,7 @@ struct Job {
 
 impl Job {
     pub async fn run(&self, octocrab: &Octocrab, context: &Batch) -> Vec<StepResult<OctocrabResult, Error>> {
+        debug!("{:?}", context);
         info!(
             "job: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string())
@@ -159,6 +160,7 @@ impl CreateLabelOptions {
         repo: impl Into<String>,
         context: &Job,
     ) -> Result<OctocrabResult, Error> {
+        debug!("{:?}", context);
         let label = octocrab
             .issues(owner, repo)
             .create_label(&self.name, &self.color, &self.description)
