@@ -42,13 +42,14 @@ type BatchResult<Output, Err> = Vec<Vec<StepResult<Output, Err>>>;
 impl Batch {
     pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<OctocrabResult, Error> {
         info!(
-            "Running batch: {}",
-            &self.name.clone().unwrap_or("UNAMED".to_string())
+            "Running batch: {} with version specs: {}",
+            &self.name.clone().unwrap_or("UNAMED".to_string()),
+            &self.version,
         );
         let jobs = &self.jobs;
         let jobs_iter = jobs
             .iter()
-            .map(|job| async move { job.run(octocrab).await });
+            .map(|job| async move { job.run(octocrab, self).await });
         futures::future::join_all(jobs_iter).await
     }
 }
@@ -62,7 +63,7 @@ impl TryFrom<&[u8]> for Batch {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 struct Job {
     name: Option<String>,
@@ -71,7 +72,7 @@ struct Job {
 }
 
 impl Job {
-    pub async fn run(&self, octocrab: &Octocrab) -> Vec<StepResult<OctocrabResult, Error>> {
+    pub async fn run(&self, octocrab: &Octocrab, context: &Batch) -> Vec<StepResult<OctocrabResult, Error>> {
         info!(
             "job: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string())
@@ -80,7 +81,7 @@ impl Job {
         let steps = &self.steps;
         let steps_iter = steps
             .iter()
-            .map(|step| async move { step.run(octocrab, on_repositories).await });
+            .map(|step| async move { step.run(octocrab, on_repositories, self).await });
         futures::future::join_all(steps_iter).await
     }
 }
@@ -91,7 +92,7 @@ struct Repository {
     name: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 struct Step {
     name: Option<String>,
     runs: Vec<Command>,
@@ -104,6 +105,7 @@ impl Step {
         &self,
         octocrab: &Octocrab,
         repositories: &[Repository],
+        context: &Job,
     ) -> StepResult<OctocrabResult, Error> {
         info!(
             "step: {}",
@@ -113,7 +115,7 @@ impl Step {
         let runs_iter = runs.iter().map(|command| async move {
             let on_repositories_iter = repositories.iter().map(|repository| async move {
                 command
-                    .run(octocrab, &repository.owner, &repository.name)
+                    .run(octocrab, &repository.owner, &repository.name, context)
                     .await
             });
             futures::future::join_all(on_repositories_iter).await
@@ -134,9 +136,10 @@ impl Command {
         octocrab: &Octocrab,
         owner: impl Into<String>,
         repo: impl Into<String>,
+        context: &Job,
     ) -> Result<OctocrabResult, Error> {
         match self {
-            Self::CreateLabel(options) => options.run(octocrab, owner, repo).await,
+            Self::CreateLabel(options) => options.run(octocrab, owner, repo, context).await,
         }
     }
 }
@@ -154,6 +157,7 @@ impl CreateLabelOptions {
         octocrab: &Octocrab,
         owner: impl Into<String>,
         repo: impl Into<String>,
+        context: &Job,
     ) -> Result<OctocrabResult, Error> {
         let label = octocrab
             .issues(owner, repo)
