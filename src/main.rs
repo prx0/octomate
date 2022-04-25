@@ -3,7 +3,7 @@ use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
 use tokio::fs;
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 #[derive(Debug, Snafu)]
@@ -30,6 +30,45 @@ async fn read_file(path: impl AsRef<Path>) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
+#[derive(Debug)]
+struct Context<'a> {
+    batch: &'a Batch,
+    job: Option<&'a Job>,
+    step: Option<&'a Step>,
+}
+
+impl<'a> Context<'a> {
+    pub fn new(batch: &'a Batch, job: Option<&'a Job>, step: Option<&'a Step>) -> Self {
+        Self { batch, job, step }
+    }
+
+    pub fn update_from_job(&self, job: &'a Job) -> Self {
+        Self {
+            batch: self.batch,
+            job: Some(job),
+            step: self.step,
+        }
+    }
+
+    pub fn update_from_step(&self, step: &'a Step) -> Self {
+        Self {
+            batch: self.batch,
+            job: self.job,
+            step: Some(step),
+        }
+    }
+}
+
+impl<'a> From<&Context<'a>> for Context<'a> {
+    fn from(ctx: &Context<'a>) -> Self {
+        Self {
+            batch: ctx.batch,
+            job: ctx.job,
+            step: ctx.step,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 struct Batch {
     version: String,
@@ -42,13 +81,14 @@ type BatchResult<Output, Err> = Vec<Vec<StepResult<Output, Err>>>;
 impl Batch {
     pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<OctocrabResult, Error> {
         info!(
-            "Running batch: {}",
-            &self.name.clone().unwrap_or("UNAMED".to_string())
+            "Running batch: {} with version specs: {}",
+            &self.name.clone().unwrap_or("UNAMED".to_string()),
+            &self.version,
         );
         let jobs = &self.jobs;
         let jobs_iter = jobs
             .iter()
-            .map(|job| async move { job.run(octocrab).await });
+            .map(|job| async move { job.run(octocrab, &Context::new(self, None, None)).await });
         futures::future::join_all(jobs_iter).await
     }
 }
@@ -62,7 +102,7 @@ impl TryFrom<&[u8]> for Batch {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 struct Job {
     name: Option<String>,
@@ -71,16 +111,22 @@ struct Job {
 }
 
 impl Job {
-    pub async fn run(&self, octocrab: &Octocrab) -> Vec<StepResult<OctocrabResult, Error>> {
+    pub async fn run(
+        &self,
+        octocrab: &Octocrab,
+        ctx: &Context<'_>,
+    ) -> Vec<StepResult<OctocrabResult, Error>> {
+        debug!("{:?}", ctx);
         info!(
             "job: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string())
         );
         let on_repositories = &self.on_repositories;
         let steps = &self.steps;
-        let steps_iter = steps
-            .iter()
-            .map(|step| async move { step.run(octocrab, on_repositories).await });
+        let steps_iter = steps.iter().map(|step| async move {
+            step.run(octocrab, on_repositories, &ctx.update_from_job(self))
+                .await
+        });
         futures::future::join_all(steps_iter).await
     }
 }
@@ -91,7 +137,7 @@ struct Repository {
     name: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 struct Step {
     name: Option<String>,
     runs: Vec<Command>,
@@ -104,6 +150,7 @@ impl Step {
         &self,
         octocrab: &Octocrab,
         repositories: &[Repository],
+        ctx: &Context<'_>,
     ) -> StepResult<OctocrabResult, Error> {
         info!(
             "step: {}",
@@ -113,7 +160,12 @@ impl Step {
         let runs_iter = runs.iter().map(|command| async move {
             let on_repositories_iter = repositories.iter().map(|repository| async move {
                 command
-                    .run(octocrab, &repository.owner, &repository.name)
+                    .run(
+                        octocrab,
+                        &repository.owner,
+                        &repository.name,
+                        &ctx.update_from_step(self),
+                    )
                     .await
             });
             futures::future::join_all(on_repositories_iter).await
@@ -134,9 +186,10 @@ impl Command {
         octocrab: &Octocrab,
         owner: impl Into<String>,
         repo: impl Into<String>,
+        ctx: &Context<'_>,
     ) -> Result<OctocrabResult, Error> {
         match self {
-            Self::CreateLabel(options) => options.run(octocrab, owner, repo).await,
+            Self::CreateLabel(options) => options.run(octocrab, owner, repo, ctx).await,
         }
     }
 }
@@ -154,7 +207,9 @@ impl CreateLabelOptions {
         octocrab: &Octocrab,
         owner: impl Into<String>,
         repo: impl Into<String>,
+        ctx: &Context<'_>,
     ) -> Result<OctocrabResult, Error> {
+        debug!("{:?}", ctx);
         let label = octocrab
             .issues(owner, repo)
             .create_label(&self.name, &self.color, &self.description)
