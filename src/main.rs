@@ -1,4 +1,4 @@
-use octocrab::{models::Label, Octocrab};
+use octocrab::Octocrab;
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
@@ -7,7 +7,7 @@ use tracing::{debug, info};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 #[derive(Debug, Snafu)]
-enum Error {
+pub enum Error {
     #[snafu(display("Could not read file {path}"))]
     IO {
         source: tokio::io::Error,
@@ -17,8 +17,6 @@ enum Error {
     SerdeJson { source: serde_json::Error },
     #[snafu(display("SerdeYaml error: {source}"))]
     SerdeYaml { source: serde_yaml::Error },
-    #[snafu(display("Serde error: {source}"))]
-    Hyper { source: hyper::http::Error },
     #[snafu(display("Octocrab error: {source}"))]
     Octocrab { source: octocrab::Error },
 }
@@ -79,7 +77,7 @@ struct Batch {
 type BatchResult<Output, Err> = Vec<Vec<StepResult<Output, Err>>>;
 
 impl Batch {
-    pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<OctocrabResult, Error> {
+    pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<command::Response, Error> {
         info!(
             "Running batch: {} with version specs: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string()),
@@ -115,7 +113,7 @@ impl Job {
         &self,
         octocrab: &Octocrab,
         ctx: &Context<'_>,
-    ) -> Vec<StepResult<OctocrabResult, Error>> {
+    ) -> Vec<StepResult<command::Response, Error>> {
         debug!("{:?}", ctx);
         info!(
             "job: {}",
@@ -140,7 +138,7 @@ struct Repository {
 #[derive(Deserialize, Debug, Clone, Default)]
 struct Step {
     name: Option<String>,
-    runs: Vec<Command>,
+    runs: Vec<command::Command>,
 }
 
 type StepResult<Output, Err> = Vec<Vec<Result<Output, Err>>>;
@@ -151,7 +149,7 @@ impl Step {
         octocrab: &Octocrab,
         repositories: &[Repository],
         ctx: &Context<'_>,
-    ) -> StepResult<OctocrabResult, Error> {
+    ) -> StepResult<command::Response, Error> {
         info!(
             "step: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string())
@@ -174,53 +172,64 @@ impl Step {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "kebab-case")]
-enum Command {
-    CreateLabel(CreateLabelOptions),
-}
+mod command {
+    use super::Context;
+    use super::Error;
+    use super::Octocrab;
+    use crate::OctocrabSnafu;
+    use octocrab::models::Label;
+    use serde::Deserialize;
+    use snafu::{ResultExt, Snafu};
+    use tracing::{debug, info};
 
-impl Command {
-    pub async fn run(
-        &self,
-        octocrab: &Octocrab,
-        owner: impl Into<String>,
-        repo: impl Into<String>,
-        ctx: &Context<'_>,
-    ) -> Result<OctocrabResult, Error> {
-        match self {
-            Self::CreateLabel(options) => options.run(octocrab, owner, repo, ctx).await,
+    #[derive(Deserialize, Debug, Clone)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum Command {
+        CreateLabel(CreateLabelOptions),
+    }
+
+    impl Command {
+        pub async fn run(
+            &self,
+            octocrab: &Octocrab,
+            owner: impl Into<String>,
+            repo: impl Into<String>,
+            ctx: &Context<'_>,
+        ) -> Result<Response, Error> {
+            match self {
+                Self::CreateLabel(options) => options.run(octocrab, owner, repo, ctx).await,
+            }
         }
     }
-}
 
-#[derive(Deserialize, Debug, Clone)]
-struct CreateLabelOptions {
-    name: String,
-    color: String,
-    description: String,
-}
-
-impl CreateLabelOptions {
-    pub async fn run(
-        &self,
-        octocrab: &Octocrab,
-        owner: impl Into<String>,
-        repo: impl Into<String>,
-        ctx: &Context<'_>,
-    ) -> Result<OctocrabResult, Error> {
-        debug!("{:?}", ctx);
-        let label = octocrab
-            .issues(owner, repo)
-            .create_label(&self.name, &self.color, &self.description)
-            .await
-            .context(OctocrabSnafu)?;
-        Ok(OctocrabResult::CreateLabel(label))
+    #[derive(Deserialize, Debug, Clone)]
+    pub struct CreateLabelOptions {
+        name: String,
+        color: String,
+        description: String,
     }
-}
 
-enum OctocrabResult {
-    CreateLabel(Label),
+    impl CreateLabelOptions {
+        pub async fn run(
+            &self,
+            octocrab: &Octocrab,
+            owner: impl Into<String>,
+            repo: impl Into<String>,
+            ctx: &Context<'_>,
+        ) -> Result<Response, Error> {
+            debug!("{:?}", ctx);
+            let label = octocrab
+                .issues(owner, repo)
+                .create_label(&self.name, &self.color, &self.description)
+                .await
+                .context(OctocrabSnafu)?;
+            Ok(Response::CreateLabel(label))
+        }
+    }
+
+    pub enum Response {
+        CreateLabel(Label),
+    }
 }
 
 struct Octomate {
@@ -238,14 +247,14 @@ impl Octomate {
         })
     }
 
-    async fn run_batch(&self, batch: &Batch) -> BatchResult<OctocrabResult, Error> {
+    async fn run_batch(&self, batch: &Batch) -> BatchResult<command::Response, Error> {
         batch.run(&self.octocrab).await
     }
 
     async fn run_batch_from_file(
         &self,
         filepath: impl AsRef<Path>,
-    ) -> Result<BatchResult<OctocrabResult, Error>, Error> {
+    ) -> Result<BatchResult<command::Response, Error>, Error> {
         let bytes = read_file(filepath).await?;
         let batch = Batch::try_from(bytes.as_slice())?;
         Ok(self.run_batch(&batch).await)
