@@ -1,4 +1,4 @@
-use octocrab::{models::Label, Octocrab};
+use octocrab::{models::{Label, issues::Issue}, Octocrab};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
@@ -126,6 +126,7 @@ impl Step {
 #[serde(rename_all = "kebab-case")]
 enum Command {
     CreateLabel(CreateLabelOptions),
+    CreateIssue(CreateIssueOptions),
 }
 
 impl Command {
@@ -137,7 +138,50 @@ impl Command {
     ) -> Result<OctocrabResult, Error> {
         match self {
             Self::CreateLabel(options) => options.run(octocrab, owner, repo).await,
+            Self::CreateIssue(options) => options.run(octocrab, owner, repo).await,
         }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct CreateTeamOptions {
+    name: String,
+    description: Option<String>,
+    maintainers: Option<Vec<String>>, 
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct CreateIssueOptions {
+    title: String,
+    body: String,
+    milestone: Option<u64>,
+    assignees: Option<Vec<String>>,
+    labels: Option<Vec<String>>,
+}
+
+impl CreateIssueOptions {
+    pub async fn run(
+        &self,
+        octocrab: &Octocrab,
+        owner: impl Into<String>,
+        repo: impl Into<String>,
+    ) -> Result<OctocrabResult, Error> {
+        let milestone = self.milestone.unwrap_or(0u64);
+        let assignees = self.assignees.clone().unwrap_or(vec![]);
+        let labels = self.labels.clone().unwrap_or(vec![]);
+
+        let issue = octocrab
+            .issues(owner, repo)
+            .create(&self.title)
+            .body(&self.body)
+            .milestone(milestone)
+            .assignees(assignees)
+            .labels(labels)
+            .send()
+            .await
+            .context(OctocrabSnafu)?;
+
+        Ok(OctocrabResult::CreateIssue(issue))
     }
 }
 
@@ -166,6 +210,7 @@ impl CreateLabelOptions {
 
 enum OctocrabResult {
     CreateLabel(Label),
+    CreateIssue(Issue),
 }
 
 struct Octomate {
