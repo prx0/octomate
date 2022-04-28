@@ -119,10 +119,9 @@ impl Job {
             "job: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string())
         );
-        let on_repositories = &self.on_repositories;
         let steps = &self.steps;
         let steps_iter = steps.iter().map(|step| async move {
-            step.run(octocrab, on_repositories, &ctx.update_from_job(self))
+            step.run(octocrab, &ctx.update_from_job(self))
                 .await
         });
         futures::future::join_all(steps_iter).await
@@ -147,7 +146,6 @@ impl Step {
     pub async fn run(
         &self,
         octocrab: &Octocrab,
-        repositories: &[Repository],
         ctx: &Context<'_>,
     ) -> StepResult<command::Response, Error> {
         info!(
@@ -156,17 +154,12 @@ impl Step {
         );
         let runs = &self.runs;
         let runs_iter = runs.iter().map(|command| async move {
-            let on_repositories_iter = repositories.iter().map(|repository| async move {
-                command
-                    .run(
-                        octocrab,
-                        &repository.owner,
-                        &repository.name,
-                        &ctx.update_from_step(self),
-                    )
-                    .await
-            });
-            futures::future::join_all(on_repositories_iter).await
+            command
+                .run(
+                    octocrab,
+                    &ctx.update_from_step(self),
+                )
+                .await
         });
         futures::future::join_all(runs_iter).await
     }
@@ -194,14 +187,12 @@ mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            owner: impl Into<String>,
-            repo: impl Into<String>,
             ctx: &Context<'_>,
-        ) -> Result<Response, Error> {
+        ) -> Vec<Result<Response, Error>> {
             match self {
-                Self::CreateLabel(options) => options.run(octocrab, owner, repo, ctx).await,
-                Self::CreateIssue(options) => options.run(octocrab, owner, repo, ctx).await,
-                Self::CreateTeam(options) => options.run(octocrab, owner, ctx).await,
+                Self::CreateLabel(options) => options.run(octocrab, ctx).await,
+                Self::CreateIssue(options) => options.run(octocrab, ctx).await,
+                Self::CreateTeam(options) => options.run(octocrab, ctx).await,
             }
         }
     }
@@ -210,6 +201,7 @@ mod command {
     pub struct CreateTeamOptions {
         name: String,
         description: Option<String>,
+        owner: String,
         maintainers: Option<Vec<String>>, 
     }
 
@@ -217,33 +209,37 @@ mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            owner: impl Into<String>,
             ctx: &Context<'_>
-        ) -> Result<Response, Error> {
+        ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
-            let on_repositories = match ctx.job {
-                None => vec![],
-                Some(job) => job.on_repositories.clone(),
+            let team = match ctx.job {
+                None => Ok(Response::None),
+                Some(job) => {
+                    let on_repositories = &job.on_repositories;
+                    let repo_names: &Vec<String> = &on_repositories.iter().map(|repository| {
+                        repository.name.clone()
+                    }).collect();
+
+                    let description = self.description.clone().unwrap_or(String::from(""));
+                    let maintainers = self.maintainers.clone().unwrap_or(vec![]);
+
+                    let team_res = octocrab
+                        .teams(&self.owner)
+                        .create(&self.name)
+                        .description(&description)
+                        .maintainers(&maintainers)
+                        .repo_names(&repo_names)
+                        .send()
+                        .await
+                        .context(OctocrabSnafu);
+
+                    match team_res {
+                        Ok(team) => Ok(Response::CreateTeam(team)),
+                        Err(err) => Err(err)
+                    }                    
+                }
             };
-
-            let repo_names: &Vec<String> = &on_repositories.iter().map(|repository| {
-                repository.name.clone()
-            }).collect();
-
-            let description = self.description.clone().unwrap_or(String::from(""));
-            let maintainers = self.maintainers.clone().unwrap_or(vec![]);
-
-            let team = octocrab
-                .teams(owner)
-                .create(&self.name)
-                .description(&description)
-                .maintainers(&maintainers)
-                .repo_names(&repo_names)
-                .send()
-                .await
-                .context(OctocrabSnafu)?;
-
-            Ok(Response::CreateTeam(team))
+            vec![team]
         }
     }
 
@@ -260,27 +256,36 @@ mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            owner: impl Into<String>,
-            repo: impl Into<String>,
             ctx: &Context<'_>
-        ) -> Result<Response, Error> {
+        ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
-            let milestone = self.milestone.unwrap_or(0u64);
-            let assignees = self.assignees.clone().unwrap_or(vec![]);
-            let labels = self.labels.clone().unwrap_or(vec![]);
+            match ctx.job {
+                None => vec![Ok(Response::None)],
+                Some(job) => {
+                    let on_repositories = &job.on_repositories;
+                    let statements = on_repositories.iter().map(|repository| async move {
+                        let milestone = self.milestone.unwrap_or(0u64);
+                        let assignees = self.assignees.clone().unwrap_or(vec![]);
+                        let labels = self.labels.clone().unwrap_or(vec![]);
 
-            let issue = octocrab
-                .issues(owner, repo)
-                .create(&self.title)
-                .body(&self.body)
-                .milestone(milestone)
-                .assignees(assignees)
-                .labels(labels)
-                .send()
-                .await
-                .context(OctocrabSnafu)?;
+                        let issue = octocrab
+                            .issues(&repository.owner, &repository.name)
+                            .create(&self.title)
+                            .body(&self.body)
+                            .milestone(milestone)
+                            .assignees(assignees)
+                            .labels(labels)
+                            .send()
+                            .await
+                            .context(OctocrabSnafu)?;
 
-            Ok(Response::CreateIssue(issue))
+                        Ok(Response::CreateIssue(issue))
+                    });
+
+                    let issues: Vec<Result<Response, Error>> = futures::future::join_all(statements).await;
+                    issues
+                }
+            }
         }
     }
 
@@ -295,17 +300,25 @@ mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            owner: impl Into<String>,
-            repo: impl Into<String>,
             ctx: &Context<'_>
-        ) -> Result<Response, Error> {
+        ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
-            let label = octocrab
-                .issues(owner, repo)
-                .create_label(&self.name, &self.color, &self.description)
-                .await
-                .context(OctocrabSnafu)?;
-            Ok(Response::CreateLabel(label))
+            match ctx.job {
+                None => vec![Ok(Response::None)],
+                Some(job) => {
+                    let on_repositories = &job.on_repositories;
+                    let statements = on_repositories.iter().map(|repository| async move {
+                        let label = octocrab
+                            .issues(&repository.owner, &repository.name)
+                            .create_label(&self.name, &self.color, &self.description)
+                            .await
+                            .context(OctocrabSnafu)?;
+                        Ok(Response::CreateLabel(label))
+                    });
+                    let labels: Vec<Result<Response, Error>> = futures::future::join_all(statements).await;
+                    labels
+                }
+            }
         }
     }
 
@@ -313,6 +326,7 @@ mod command {
         CreateLabel(Label),
         CreateIssue(Issue),
         CreateTeam(Team),
+        None
     }
 }
 
