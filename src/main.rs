@@ -120,10 +120,9 @@ impl Job {
             &self.name.clone().unwrap_or("UNAMED".to_string())
         );
         let steps = &self.steps;
-        let steps_iter = steps.iter().map(|step| async move {
-            step.run(octocrab, &ctx.update_from_job(self))
-                .await
-        });
+        let steps_iter = steps
+            .iter()
+            .map(|step| async move { step.run(octocrab, &ctx.update_from_job(self)).await });
         futures::future::join_all(steps_iter).await
     }
 }
@@ -153,14 +152,9 @@ impl Step {
             &self.name.clone().unwrap_or("UNAMED".to_string())
         );
         let runs = &self.runs;
-        let runs_iter = runs.iter().map(|command| async move {
-            command
-                .run(
-                    octocrab,
-                    &ctx.update_from_step(self),
-                )
-                .await
-        });
+        let runs_iter = runs
+            .iter()
+            .map(|command| async move { command.run(octocrab, &ctx.update_from_step(self)).await });
         futures::future::join_all(runs_iter).await
     }
 }
@@ -170,7 +164,7 @@ mod command {
     use super::Error;
     use super::Octocrab;
     use crate::OctocrabSnafu;
-    use octocrab::models::{issues::Issue, teams::Team, Label, gists::Gist};
+    use octocrab::models::{gists::Gist, issues::Issue, teams::Team, Label};
     use serde::Deserialize;
     use snafu::ResultExt;
     use tracing::{debug, info};
@@ -204,14 +198,14 @@ mod command {
         title: String,
         content: String,
         description: Option<String>,
-        public: Option<bool>
+        public: Option<bool>,
     }
 
     impl CreateGistOptions {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            ctx: &Context<'_>
+            ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
             let gist_res = octocrab
@@ -236,26 +230,27 @@ mod command {
         name: String,
         description: Option<String>,
         owner: String,
-        maintainers: Option<Vec<String>>, 
+        maintainers: Option<Vec<String>>,
     }
 
     impl CreateTeamOptions {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            ctx: &Context<'_>
+            ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
             let team = match ctx.job {
                 None => Ok(Response::None),
                 Some(job) => {
                     let on_repositories = &job.on_repositories;
-                    let repo_names: &Vec<String> = &on_repositories.iter().map(|repository| {
-                        repository.name.clone()
-                    }).collect();
+                    let repo_names: &Vec<String> = &on_repositories
+                        .iter()
+                        .map(|repository| repository.name.clone())
+                        .collect();
 
-                    let description = self.description.clone().unwrap_or(String::from(""));
-                    let maintainers = self.maintainers.clone().unwrap_or(vec![]);
+                    let description = self.description.clone().unwrap_or_default();
+                    let maintainers = self.maintainers.clone().unwrap_or_default();
 
                     let team_res = octocrab
                         .teams(&self.owner)
@@ -269,8 +264,8 @@ mod command {
 
                     match team_res {
                         Ok(team) => Ok(Response::CreateTeam(team)),
-                        Err(err) => Err(err)
-                    }                    
+                        Err(err) => Err(err),
+                    }
                 }
             };
             vec![team]
@@ -290,7 +285,7 @@ mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            ctx: &Context<'_>
+            ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
             match ctx.job {
@@ -298,9 +293,9 @@ mod command {
                 Some(job) => {
                     let on_repositories = &job.on_repositories;
                     let statements = on_repositories.iter().map(|repository| async move {
-                        let milestone = self.milestone.unwrap_or(0u64);
-                        let assignees = self.assignees.clone().unwrap_or(vec![]);
-                        let labels = self.labels.clone().unwrap_or(vec![]);
+                        let milestone = self.milestone.unwrap_or_default();
+                        let assignees = self.assignees.clone().unwrap_or_default();
+                        let labels = self.labels.clone().unwrap_or_default();
 
                         let issue = octocrab
                             .issues(&repository.owner, &repository.name)
@@ -316,7 +311,8 @@ mod command {
                         Ok(Response::CreateIssue(issue))
                     });
 
-                    let issues: Vec<Result<Response, Error>> = futures::future::join_all(statements).await;
+                    let issues: Vec<Result<Response, Error>> =
+                        futures::future::join_all(statements).await;
                     issues
                 }
             }
@@ -334,7 +330,7 @@ mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            ctx: &Context<'_>
+            ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
             debug!("{:?}", ctx);
             match ctx.job {
@@ -349,7 +345,8 @@ mod command {
                             .context(OctocrabSnafu)?;
                         Ok(Response::CreateLabel(label))
                     });
-                    let labels: Vec<Result<Response, Error>> = futures::future::join_all(statements).await;
+                    let labels: Vec<Result<Response, Error>> =
+                        futures::future::join_all(statements).await;
                     labels
                 }
             }
@@ -361,7 +358,7 @@ mod command {
         CreateIssue(Issue),
         CreateTeam(Team),
         CreateGist(Gist),
-        None
+        None,
     }
 }
 
