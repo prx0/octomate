@@ -170,7 +170,7 @@ mod command {
     use super::Error;
     use super::Octocrab;
     use crate::OctocrabSnafu;
-    use octocrab::models::{issues::Issue, teams::Team, Label};
+    use octocrab::models::{issues::Issue, teams::Team, Label, gists::Gist};
     use serde::Deserialize;
     use snafu::ResultExt;
     use tracing::{debug, info};
@@ -181,6 +181,7 @@ mod command {
         CreateLabel(CreateLabelOptions),
         CreateIssue(CreateIssueOptions),
         CreateTeam(CreateTeamOptions),
+        CreateGist(CreateGistOptions),
     }
 
     impl Command {
@@ -193,6 +194,39 @@ mod command {
                 Self::CreateLabel(options) => options.run(octocrab, ctx).await,
                 Self::CreateIssue(options) => options.run(octocrab, ctx).await,
                 Self::CreateTeam(options) => options.run(octocrab, ctx).await,
+                Self::CreateGist(options) => options.run(octocrab, ctx).await,
+            }
+        }
+    }
+
+    #[derive(Deserialize, Debug, Clone)]
+    pub struct CreateGistOptions {
+        title: String,
+        content: String,
+        description: Option<String>,
+        public: Option<bool>
+    }
+
+    impl CreateGistOptions {
+        pub async fn run(
+            &self,
+            octocrab: &Octocrab,
+            ctx: &Context<'_>
+        ) -> Vec<Result<Response, Error>> {
+            debug!("{:?}", ctx);
+            let gist_res = octocrab
+                .gists()
+                .create()
+                .file(&self.title, &self.content)
+                .description(&self.description.clone().unwrap_or_default())
+                .public(self.public.unwrap_or(false))
+                .send()
+                .await
+                .context(OctocrabSnafu);
+
+            match gist_res {
+                Ok(gist) => vec![Ok(Response::CreateGist(gist))],
+                Err(err) => vec![Err(err)],
             }
         }
     }
@@ -326,6 +360,7 @@ mod command {
         CreateLabel(Label),
         CreateIssue(Issue),
         CreateTeam(Team),
+        CreateGist(Gist),
         None
     }
 }
