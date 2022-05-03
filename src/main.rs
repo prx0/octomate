@@ -487,13 +487,5 @@ jobs:
                 }]
             }
         );
-
-        let response = batch.run(&octocrab).await;
-        let result = response.first().unwrap().first().unwrap().first().unwrap().first().unwrap();
-        match result {
-            Ok(command::Response::CreateLabel(_)) => assert!(true),
-            Err(err) => assert!(false, "{:?}", err),
-            _ => assert!(false),
-        };
     }
 }
