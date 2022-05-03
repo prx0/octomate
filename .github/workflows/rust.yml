@@ -60,6 +60,7 @@ jobs:
 
   stable-tests:
     runs-on: ubuntu-latest
+    needs: ["stable-build"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2

@@ -2,7 +2,7 @@
 
 > Automate things using the Github API, run batch of tasks to manage Github related things.
 
-Example of batch file:
+Example of batch file `batch.yml`:
 
 ```yml
 version: "1.0"
@@ -89,3 +89,8 @@ jobs:
               color: "000000" # hex color code without the # sign
               description: "A description"
 ```
+
+## Roadmap
+
+- [] Add a CLI
+- [] Add more tests
