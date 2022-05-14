@@ -1,10 +1,14 @@
-use octocrab::Octocrab;
+use clap::Parser;
+use octocrab::{models::Label, Octocrab};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
 use tokio::fs;
 use tracing::{debug, info};
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
+use tracing_subscriber::{
+    filter::{EnvFilter, LevelFilter},
+    fmt::format::FmtSpan,
+};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -19,6 +23,13 @@ pub enum Error {
     SerdeYaml { source: serde_yaml::Error },
     #[snafu(display("Octocrab error: {source}"))]
     Octocrab { source: octocrab::Error },
+}
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+pub struct Options {
+    #[clap(long, help = "The batch file to run")]
+    pub batch_file: String,
 }
 
 async fn read_file(path: impl AsRef<Path>) -> Result<Vec<u8>, Error> {
@@ -393,10 +404,17 @@ impl Octomate {
 
 #[tokio::main]
 async fn main() {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .with_env_var("OCTOMATE_LOG")
+        .from_env_lossy();
+
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(env_filter)
         .init();
+
+    let options = Options::parse();
 
     let personal_token =
         rpassword::prompt_password("Enter your personal access token (scope: repo): ")
@@ -407,7 +425,7 @@ async fn main() {
         .expect("Unable to init octocrab");
 
     octomate
-        .run_batch_from_file("batch.yml")
+        .run_batch_from_file(options.batch_file)
         .await
         .expect("Unable to run batch from file");
 }
