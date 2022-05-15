@@ -1,5 +1,5 @@
 use clap::Parser;
-use octocrab::{models::Label, Octocrab};
+use octocrab::Octocrab;
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
