@@ -3,6 +3,20 @@
 > Automate things using the Github API,
 run batch of tasks to manage Github related things.
 
+```sh
+octomate --help
+```
+
+```sh
+USAGE:
+    octomate --batch-file <BATCH_FILE>
+
+OPTIONS:
+        --batch-file <BATCH_FILE>    The batch file to run
+    -h, --help                       Print help information
+    -V, --version                    Print version information
+```
+
 Example of batch file `batch.yml`:
 
 ```yml
