@@ -1,6 +1,7 @@
 # Octomate
 
-> Automate things using the Github API, run batch of tasks to manage Github related things.
+> Automate things using the Github API,
+run batch of tasks to manage Github related things.
 
 Example of batch file `batch.yml`:
 
@@ -34,6 +35,16 @@ jobs:
                 - ironman
                 - captain
 ```
+
+## Installation
+
+You can install the latest version of commit using the git url.
+
+```sh
+cargo install --git https://github.com/prx0/octomate
+```
+
+You can had the `--tag` option to ask for a specific version of octomate.
 
 ## Batch specifications
 
@@ -92,5 +103,5 @@ jobs:
 
 ## Roadmap
 
-- [] Add a CLI
+- [x] Add a CLI
 - [] Add more tests

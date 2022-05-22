@@ -1,16 +1,15 @@
 [package]
 authors = ["Maximilien DI DIO <contact@protocod.dev>"]
 name = "octomate"
+description = "Automate things using the Github API"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-clap = "3.1.6"
 serde_json = "1.0.79"
 serde_yaml = "0.8.23"
 snafu = "0.7.0"
@@ -21,9 +20,13 @@ rprompt = "1.0.5"
 octocrab = "0.15.4"
 futures = "0.3.21"
 tracing = "0.1.32"
-tracing-subscriber = { version = "0.3.9", features = ['tracing-log', 'env-filter'] }
 mockito = "0.31.0"
+tracing-subscriber = { version = "0.3.11", features = ['tracing-log', 'env-filter'] }
 
 [dependencies.serde]
 version = "1.0.136"
+features = ['derive']
+
+[dependencies.clap]
+version = "3.1.18"
 features = ['derive']
