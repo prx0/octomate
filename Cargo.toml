@@ -5,6 +5,7 @@ description = "Automate things using the Github API"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+keywords = ["api", "github", "tool"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
