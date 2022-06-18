@@ -378,9 +378,9 @@ struct Octomate {
 }
 
 impl Octomate {
-    async fn new(personal_token: String) -> Result<Self, Error> {
+    async fn new(personal_token: impl Into<String>) -> Result<Self, Error> {
         let octocrab = octocrab::Octocrab::builder()
-            .personal_token(personal_token)
+            .personal_token(personal_token.into())
             .build()
             .context(OctocrabSnafu)?;
         Ok(Self {
