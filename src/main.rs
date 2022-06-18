@@ -1,6 +1,6 @@
 use clap::Parser;
-use paris::{info, Logger};
 use octocrab::Octocrab;
+use paris::{info, Logger};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
@@ -167,12 +167,7 @@ impl Step {
 }
 
 pub mod command {
-    use super::{
-        Context,
-        Error,
-        Octocrab,
-        info
-    };
+    use super::{info, Context, Error, Octocrab};
     use crate::OctocrabSnafu;
     use octocrab::models::{gists::Gist, issues::Issue, teams::Team, Label};
     use serde::Deserialize;
@@ -410,7 +405,9 @@ async fn main() {
     let octomate = Octomate::new(personal_token)
         .await
         .expect("Unable to init octocrab");
-    logger.done().success("Authenticated successfully to github");
+    logger
+        .done()
+        .success("Authenticated successfully to github");
 
     logger.loading(format!("Read batch file {:?}", options.batch_file));
     octomate
