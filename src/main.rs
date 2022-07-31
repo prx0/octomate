@@ -1,14 +1,10 @@
 use clap::Parser;
 use octocrab::Octocrab;
+use paris::{info, Logger};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::{path::Path, sync::Arc};
 use tokio::fs;
-use tracing::{debug, info};
-use tracing_subscriber::{
-    filter::{EnvFilter, LevelFilter},
-    fmt::format::FmtSpan,
-};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -89,6 +85,7 @@ type BatchResult<Output, Err> = Vec<Vec<StepResult<Output, Err>>>;
 
 impl Batch {
     pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<command::Response, Error> {
+        println!();
         info!(
             "Running batch: {} with version specs: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string()),
@@ -125,7 +122,6 @@ impl Job {
         octocrab: &Octocrab,
         ctx: &Context<'_>,
     ) -> Vec<StepResult<command::Response, Error>> {
-        debug!("{:?}", ctx);
         info!(
             "job: {}",
             &self.name.clone().unwrap_or("UNAMED".to_string())
@@ -171,14 +167,11 @@ impl Step {
 }
 
 pub mod command {
-    use super::Context;
-    use super::Error;
-    use super::Octocrab;
+    use super::{info, Context, Error, Octocrab};
     use crate::OctocrabSnafu;
     use octocrab::models::{gists::Gist, issues::Issue, teams::Team, Label};
     use serde::Deserialize;
     use snafu::ResultExt;
-    use tracing::{debug, info};
 
     #[derive(Deserialize, Debug, Clone, PartialEq)]
     #[serde(rename_all = "kebab-case")]
@@ -195,6 +188,7 @@ pub mod command {
             octocrab: &Octocrab,
             ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
+            info!("run: {:?}", self);
             match self {
                 Self::CreateLabel(options) => options.run(octocrab, ctx).await,
                 Self::CreateIssue(options) => options.run(octocrab, ctx).await,
@@ -216,9 +210,8 @@ pub mod command {
         pub async fn run(
             &self,
             octocrab: &Octocrab,
-            ctx: &Context<'_>,
+            _ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
-            debug!("{:?}", ctx);
             let gist_res = octocrab
                 .gists()
                 .create()
@@ -250,7 +243,6 @@ pub mod command {
             octocrab: &Octocrab,
             ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
-            debug!("{:?}", ctx);
             let team = match ctx.job {
                 None => Ok(Response::None),
                 Some(job) => {
@@ -298,7 +290,6 @@ pub mod command {
             octocrab: &Octocrab,
             ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
-            debug!("{:?}", ctx);
             match ctx.job {
                 None => vec![Ok(Response::None)],
                 Some(job) => {
@@ -343,7 +334,6 @@ pub mod command {
             octocrab: &Octocrab,
             ctx: &Context<'_>,
         ) -> Vec<Result<Response, Error>> {
-            debug!("{:?}", ctx);
             match ctx.job {
                 None => vec![Ok(Response::None)],
                 Some(job) => {
@@ -404,30 +394,27 @@ impl Octomate {
 
 #[tokio::main]
 async fn main() {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .with_env_var("OCTOMATE_LOG")
-        .from_env_lossy();
-
-    tracing_subscriber::fmt()
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-        .with_env_filter(env_filter)
-        .init();
-
     let options = Options::parse();
+    let mut logger = Logger::new();
 
     let personal_token =
         rpassword::prompt_password("Enter your personal access token (scope: repo): ")
             .expect("You need to enter a valid personal access token");
 
+    logger.loading("Authenticate to github in progress");
     let octomate = Octomate::new(personal_token)
         .await
         .expect("Unable to init octocrab");
+    logger
+        .done()
+        .success("Authenticated successfully to github");
 
+    logger.loading(format!("Read batch file {:?}", options.batch_file));
     octomate
         .run_batch_from_file(options.batch_file)
         .await
         .expect("Unable to run batch from file");
+    logger.done().success("Batch processing terminated");
 }
 
 #[cfg(test)]

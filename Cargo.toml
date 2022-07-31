@@ -10,19 +10,20 @@ keywords = ["api", "github", "tool"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
 serde_json = "1.0.79"
 serde_yaml = "0.8.23"
 snafu = "0.7.0"
-hyper = { version = "0.14.18", features = ["http2", "tcp"] }
 hyper-tls = "0.5.0"
 rpassword = "6.0.1"
 rprompt = "1.0.5"
-octocrab = "0.15.4"
+octocrab = "0.16"
 futures = "0.3.21"
 tracing = "0.1.32"
 mockito = "0.31.0"
-tracing-subscriber = { version = "0.3.11", features = ['tracing-log', 'env-filter'] }
+
+[dependencies.paris]
+version = "1.5.13"
+features = ['macros']
 
 [dependencies.serde]
 version = "1.0.136"
@@ -31,3 +32,15 @@ features = ['derive']
 [dependencies.clap]
 version = "3.1.18"
 features = ['derive']
+
+[dependencies.tracing-subscriber]
+version = "0.3.11"
+features = ['tracing-log', 'env-filter']
+
+[dependencies.hyper]
+version = "0.14.18"
+features = ["http2", "tcp"]
+
+[dependencies.tokio]
+version = "1"
+features = ["full"]
