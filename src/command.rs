@@ -4,30 +4,12 @@ use octocrab::models::{gists::Gist, issues::Issue, teams::Team, Label};
 use octocrab::Octocrab;
 use paris::info;
 use serde::Deserialize;
+use async_trait::async_trait;
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Command {
-    CreateLabel(CreateLabelOptions),
-    CreateIssue(CreateIssueOptions),
-    CreateTeam(CreateTeamOptions),
-    CreateGist(CreateGistOptions),
-}
-
-impl Command {
-    pub async fn run(
-        &self,
-        octocrab: &Octocrab,
-        ctx: &Context<'_>,
-    ) -> Vec<Result<Response, Error>> {
-        info!("run: {:?}", self);
-        match self {
-            Self::CreateLabel(options) => options.run(octocrab, ctx).await,
-            Self::CreateIssue(options) => options.run(octocrab, ctx).await,
-            Self::CreateTeam(options) => options.run(octocrab, ctx).await,
-            Self::CreateGist(options) => options.run(octocrab, ctx).await,
-        }
-    }
+#[async_trait]
+pub trait Command<'a> {
+    type Error;
+    async fn run(&'a self, octocrab: &'a Octocrab, ctx: &'a Context<'a>) -> Vec<Result<Response, Self::Error>>;
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -38,11 +20,14 @@ pub struct CreateGistOptions {
     pub public: Option<bool>,
 }
 
-impl CreateGistOptions {
-    pub async fn run(
-        &self,
-        octocrab: &Octocrab,
-        _ctx: &Context<'_>,
+#[async_trait]
+impl<'a> Command<'a> for CreateGistOptions {
+    type Error = Error;
+
+    async fn run(
+        &'a self,
+        octocrab: &'a Octocrab,
+        _ctx: &'a Context<'a>,
     ) -> Vec<Result<Response, Error>> {
         let gist_res = octocrab
             .gists()
