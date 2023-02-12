@@ -29,3 +29,11 @@ impl From<octocrab::Error> for Error {
         Error::Octocrab(err)
     }
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("Error {}", self))
+    }
+}
+
+impl std::error::Error for Error {}
