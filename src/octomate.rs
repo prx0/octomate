@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Context<'a> {
-    pub batch: &'a Batch,
-    pub job: Option<&'a Job>,
-    pub step: Option<&'a Step>,
+    pub batch: &'a Batch<'a>,
+    pub job: Option<&'a Job<'a>>,
+    pub step: Option<&'a Step<'a>>,
 }
 
 impl<'a> Context<'a> {
@@ -47,16 +47,16 @@ impl<'a> From<&Context<'a>> for Context<'a> {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct Batch {
+pub struct Batch<'a> {
     pub version: String,
     pub name: Option<String>,
-    pub jobs: Vec<Job>,
+    pub jobs: Vec<Job<'a>>,
 }
 
 type BatchResult<Output, Err> = Vec<Vec<StepResult<Output, Err>>>;
 
-impl Batch {
-    pub async fn run(&self, octocrab: &Octocrab) -> BatchResult<command::Response, Error> {
+impl<'a> Batch<'a> {
+    pub async fn run(&'a self, octocrab: &'a Octocrab) -> BatchResult<command::Response, Error> {
         println!();
         info!(
             "Running batch: {} with version specs: {}",
@@ -71,7 +71,7 @@ impl Batch {
     }
 }
 
-impl TryFrom<&[u8]> for Batch {
+impl TryFrom<&[u8]> for Batch<'_> {
     type Error = Error;
 
     fn try_from(batch_file: &[u8]) -> Result<Self, Self::Error> {
@@ -82,17 +82,17 @@ impl TryFrom<&[u8]> for Batch {
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "kebab-case")]
-pub struct Job {
+pub struct Job<'a> {
     pub name: Option<String>,
     pub on_repositories: Vec<Repository>,
-    pub steps: Vec<Step>,
+    pub steps: Vec<Step<'a>>,
 }
 
-impl Job {
+impl<'a> Job<'a> {
     pub async fn run(
-        &self,
-        octocrab: &Octocrab,
-        ctx: &Context<'_>,
+        &'a self,
+        octocrab: &'a Octocrab,
+        ctx: &'a Context<'a>,
     ) -> Vec<StepResult<command::Response, Error>> {
         info!(
             "job: {}",
@@ -113,14 +113,14 @@ pub struct Repository {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
-pub struct Step {
+pub struct Step<'a> {
     pub name: Option<String>,
-    pub runs: Vec<command::Command>,
+    pub runs: Vec<Box<dyn command::Command<'a, Error = Error>>>,
 }
 
 type StepResult<Output, Err> = Vec<Vec<Result<Output, Err>>>;
 
-impl Step {
+impl<'a> Step<'a> {
     pub async fn run(
         &self,
         octocrab: &Octocrab,
@@ -152,7 +152,7 @@ impl Octomate {
         })
     }
 
-    pub async fn run_batch(&self, batch: &Batch) -> BatchResult<command::Response, Error> {
+    pub async fn run_batch(&self, batch: &Batch<'_>) -> BatchResult<command::Response, Error> {
         batch.run(&self.octocrab).await
     }
 

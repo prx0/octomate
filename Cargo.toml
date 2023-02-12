@@ -19,6 +19,7 @@ octocrab = "0.16"
 futures = "0.3.21"
 tracing = "0.1.32"
 mockito = "0.31.0"
+async-trait = "0.1.58"
 
 [dependencies.paris]
 version = "1.5.13"
